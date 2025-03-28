@@ -1,0 +1,36 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/schema.json",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:1421",
+    "frontendDist": "../dist"
+  },
+  "identifier": "com.rss-feed-reader.dev",
+  "productName": "rss-feed-reader",
+  "version": "0.0.1",
+  "app": {
+    "security": {
+      "csp": null
+    },
+    "windows": [
+      {
+        "fullscreen": false,
+        "height": 768,
+        "resizable": true,
+        "title": "RSS Feed Reader",
+        "width": 1024
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "icon": ["icons/icon.ico"],
+    "targets": ["deb", "msi", "dmg", "appimage"]
+  },
+  "plugins": {
+    "shell": {
+      "open": true
+    }
+  }
+} 
