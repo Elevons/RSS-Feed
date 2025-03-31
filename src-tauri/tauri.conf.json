@@ -6,12 +6,12 @@
     "devUrl": "http://localhost:1421",
     "frontendDist": "../dist"
   },
-  "identifier": "com.rss-feed-reader.dev",
+  "identifier": "com.rssfeedreader.dev",
   "productName": "rss-feed-reader",
   "version": "0.0.1",
   "app": {
     "security": {
-      "csp": null
+      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: https:"
     },
     "windows": [
       {

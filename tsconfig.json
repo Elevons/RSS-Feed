@@ -25,7 +25,7 @@
     "paths": {
       "@tauri-apps/api/*": ["node_modules/@tauri-apps/api/*"]
     },
-    "typeRoots": ["node_modules/@types", "node_modules/@tauri-apps"]
+    "types": ["@tauri-apps/api"]
   },
   "include": ["src"],
   "references": [{ "path": "./tsconfig.node.json" }]

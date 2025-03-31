@@ -32,7 +32,8 @@ export default defineConfig({
   resolve: {
     alias: {
       '@tauri-apps/api/dialog': path.resolve(__dirname, './src/shims/tauri-api/dialog.ts'),
-      '@tauri-apps/api/fs': path.resolve(__dirname, './src/shims/tauri-api/fs.ts')
+      '@tauri-apps/api/fs': path.resolve(__dirname, './src/shims/tauri-api/fs.ts'),
+      '@tauri-apps/api/shell': path.resolve(__dirname, './src/shims/tauri-api/shell.ts')
     }
   }
 });

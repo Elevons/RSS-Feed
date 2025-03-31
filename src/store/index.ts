@@ -25,6 +25,7 @@ interface AppState {
   itemMatchesBucket: (item: FeedItem, bucket: Bucket) => boolean;
   assignItemToBucket: (itemId: string, bucketId: string) => void;
   removeItemFromBucket: (itemId: string, bucketId: string) => void;
+  markAsRead: (itemId: string) => void;
 }
 
 const createProxyUrl = (url: string) => {
@@ -398,6 +399,13 @@ export const useStore = create<AppState>()(
         
         return false;
       },
+
+      markAsRead: (itemId: string) => 
+        set((state) => ({
+          items: state.items.map(item => 
+            item.id === itemId ? { ...item, isRead: true } : item
+          )
+        })),
     }),
     {
       name: 'rss-feed-storage',

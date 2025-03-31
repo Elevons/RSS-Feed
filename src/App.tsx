@@ -1,10 +1,11 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useStore } from './store';
 import { DndContext, DragEndEvent } from '@dnd-kit/core';
-import { Bucket, FeedItem, SearchConfig } from './types';
+import { Bucket, FeedItem } from './types';
 // Import from shims for development or real modules in Tauri
 import { save as tauriSave } from '@tauri-apps/api/dialog';
 import { writeTextFile as tauriWriteTextFile } from '@tauri-apps/api/fs';
+import { open } from '@tauri-apps/api/shell';
 
 // Function to check if we're in a Tauri environment
 const isTauriApp = () => {
@@ -16,12 +17,9 @@ const isTauriApp = () => {
 // Import Lucide icons
 import {
   Settings,
-  Rss,
   Search,
   BookmarkPlus,
   Share2,
-  Download,
-  Upload,
   Plus,
   Trash2,
   Loader2,
@@ -30,10 +28,11 @@ import {
   Filter,
   HelpCircle,
   RefreshCw,
-  Clock,
   Pencil,
   FolderPlus,
   SortDesc,
+  Download,
+  Upload,
 } from 'lucide-react';
 
 // Define sorting options type
@@ -475,6 +474,24 @@ function App() {
     setAssignToBucketItem(null);
   };
 
+  const handleShare = async (item: FeedItem) => {
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: item.title,
+          text: item.content.substring(0, 200) + '...',
+          url: item.link
+        });
+      } else {
+        // Fallback to clipboard copy
+        await navigator.clipboard.writeText(item.link);
+        alert('Link copied to clipboard!');
+      }
+    } catch (error) {
+      console.error('Error sharing:', error);
+    }
+  };
+
   const filteredItems = useMemo(() => {
     let items = store.items;
 
@@ -529,30 +546,35 @@ function App() {
           {showSidebar && (
             <>
               <div className="mb-6">
-                <h2 className="text-[#BB86FC] font-bold mb-2">Import/Export</h2>
-                <div className="flex flex-col gap-2">
-                  <button 
-                    onClick={handleImportOpml}
-                    className="p-2 hover:bg-[#2C2C2C] rounded flex items-center gap-2"
-                    disabled={isProcessing}
-                  >
-                    {isProcessing ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <Upload className="w-4 h-4" />
-                    )}
-                    Import OPML
-                  </button>
-                  <button 
-                    onClick={handleExportData}
-                    className="p-2 hover:bg-[#2C2C2C] rounded flex items-center gap-2"
-                  >
-                    <Download className="w-4 h-4" />
-                    Export
-                  </button>
+                <h2 className="text-[#BB86FC] font-bold mb-2">Bookmarks</h2>
+                <div className="space-y-2">
+                  {store.items.filter(item => item.isBookmarked).map(item => (
+                    <div
+                      key={item.id}
+                      className="p-2 hover:bg-[#2C2C2C] rounded flex items-center justify-between"
+                    >
+                      <div className="truncate flex-1">
+                        <span className="text-sm">{item.title}</span>
+                        <div className="text-xs text-gray-400">
+                          {new Date(item.pubDate).toLocaleDateString()}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => store.toggleBookmark(item.id)}
+                          className="text-[#BB86FC] hover:text-[#BB86FC]/80 p-1"
+                        >
+                          <BookmarkPlus className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                  {store.items.filter(item => item.isBookmarked).length === 0 && (
+                    <p className="text-sm text-gray-400">No bookmarked articles</p>
+                  )}
                 </div>
               </div>
-              
+
               <div className="mb-6">
                 <h2 className="text-[#BB86FC] font-bold mb-2">Auto Refresh</h2>
                 <div className="flex flex-col gap-2">
@@ -590,14 +612,30 @@ function App() {
               <div className="mb-6">
                 <div className="flex items-center justify-between mb-2">
                   <h2 className="text-[#BB86FC] font-bold">Feeds</h2>
-                  <button
-                    onClick={handleRefreshAllFeeds}
-                    className="p-1 hover:bg-[#BB86FC] rounded"
-                    disabled={refreshingFeeds.length > 0}
-                    title="Update all feeds"
-                  >
-                    <RefreshCw className={`w-4 h-4 ${refreshingFeeds.length > 0 ? 'animate-spin' : ''}`} />
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleExportData}
+                      className="p-1 hover:bg-[#BB86FC] rounded"
+                      title="Export data"
+                    >
+                      <Download className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={handleImportOpml}
+                      className="p-1 hover:bg-[#BB86FC] rounded"
+                      title="Import OPML"
+                    >
+                      <Upload className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={handleRefreshAllFeeds}
+                      className="p-1 hover:bg-[#BB86FC] rounded"
+                      disabled={refreshingFeeds.length > 0}
+                      title="Update all feeds"
+                    >
+                      <RefreshCw className={`w-4 h-4 ${refreshingFeeds.length > 0 ? 'animate-spin' : ''}`} />
+                    </button>
+                  </div>
                 </div>
                 <div className="flex gap-2 mb-2">
                   <input
@@ -1020,6 +1058,23 @@ function App() {
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-[#BB86FC] hover:underline"
+                    onClick={async (e) => {
+                      e.preventDefault();
+                      // Mark article as read
+                      store.markAsRead(item.id);
+                      // Open link using Tauri's shell API if in desktop app
+                      if (isTauriApp()) {
+                        try {
+                          await open(item.link);
+                        } catch (error) {
+                          console.error('Failed to open link:', error);
+                          // Fallback to default browser behavior
+                          window.open(item.link, '_blank');
+                        }
+                      } else {
+                        window.open(item.link, '_blank');
+                      }
+                    }}
                   >
                     Read More
                   </a>
@@ -1039,10 +1094,15 @@ function App() {
                       className={`p-1 rounded hover:bg-[#BB86FC] hover:bg-opacity-20 ${
                         item.isBookmarked ? 'text-[#BB86FC]' : ''
                       }`}
+                      title={item.isBookmarked ? "Remove from bookmarks" : "Add to bookmarks"}
                     >
                       <BookmarkPlus className="w-4 h-4" />
                     </button>
-                    <button className="p-1 rounded hover:bg-[#BB86FC] hover:bg-opacity-20">
+                    <button
+                      onClick={() => handleShare(item)}
+                      className="p-1 rounded hover:bg-[#BB86FC] hover:bg-opacity-20"
+                      title="Share article"
+                    >
                       <Share2 className="w-4 h-4" />
                     </button>
                   </div>
