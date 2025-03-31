@@ -8,6 +8,8 @@ import { writeTextFile as tauriWriteTextFile } from '@tauri-apps/api/fs';
 
 // Function to check if we're in a Tauri environment
 const isTauriApp = () => {
+  console.log("Window object:", typeof window !== 'undefined' ? "available" : "undefined");
+  console.log("Tauri in window:", typeof window !== 'undefined' && 'Tauri' in window);
   return typeof window !== 'undefined' && 'Tauri' in window;
 };
 
@@ -29,7 +31,17 @@ import {
   HelpCircle,
   RefreshCw,
   Clock,
+  Pencil,
+  FolderPlus,
+  SortDesc,
 } from 'lucide-react';
+
+// Define sorting options type
+type SortOption = {
+  id: string;
+  label: string;
+  compareFn: (a: FeedItem, b: FeedItem) => number;
+};
 
 function App() {
   const [showSidebar, setShowSidebar] = useState(true);
@@ -45,6 +57,7 @@ function App() {
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(false);
   const [refreshInterval, setRefreshInterval] = useState(30); // minutes
   const [nextRefreshTime, setNextRefreshTime] = useState<Date | null>(null);
+  const [editingBucketId, setEditingBucketId] = useState<string | null>(null);
   const [newBucket, setNewBucket] = useState<Partial<Bucket>>({
     name: '',
     color: '#BB86FC',
@@ -58,6 +71,60 @@ function App() {
   const [newKeyword, setNewKeyword] = useState('');
   const store = useStore();
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Function to manually assign an article to a bucket
+  const [assignToBucketItem, setAssignToBucketItem] = useState<FeedItem | null>(null);
+  const [showBucketSelector, setShowBucketSelector] = useState(false);
+
+  // Add sorting state
+  const [sortOption, setSortOption] = useState<string>('date-desc');
+  const [showSortMenu, setShowSortMenu] = useState(false);
+
+  // Define sorting options
+  const sortOptions: SortOption[] = [
+    { 
+      id: 'date-desc', 
+      label: 'Newest first', 
+      compareFn: (a, b) => {
+        if (!a.pubDate) return 1;
+        if (!b.pubDate) return -1;
+        return new Date(b.pubDate).getTime() - new Date(a.pubDate).getTime();
+      }
+    },
+    { 
+      id: 'date-asc', 
+      label: 'Oldest first', 
+      compareFn: (a, b) => {
+        if (!a.pubDate) return -1;
+        if (!b.pubDate) return 1;
+        return new Date(a.pubDate).getTime() - new Date(b.pubDate).getTime();
+      }
+    },
+    { 
+      id: 'title-asc', 
+      label: 'Title (A-Z)', 
+      compareFn: (a, b) => {
+        if (!a.title) return -1;
+        if (!b.title) return 1;
+        return a.title.localeCompare(b.title);
+      }
+    },
+    { 
+      id: 'title-desc', 
+      label: 'Title (Z-A)', 
+      compareFn: (a, b) => {
+        if (!a.title) return 1;
+        if (!b.title) return -1;
+        return b.title.localeCompare(a.title);
+      }
+    },
+  ];
+  
+  // Get the current sort function
+  const getCurrentSortFn = () => {
+    return sortOptions.find(option => option.id === sortOption)?.compareFn || 
+           sortOptions[0].compareFn;
+  };
 
   const handleAddFeed = async () => {
     if (newFeedUrl) {
@@ -302,17 +369,34 @@ function App() {
 
   const handleAddBucket = () => {
     if (newBucket.name && newBucket.keywords?.length) {
-      store.addBucket({
-        id: crypto.randomUUID(),
-        name: newBucket.name,
-        color: newBucket.color || '#BB86FC',
-        keywords: newBucket.keywords,
-        operator: newBucket.operator || 'AND',
-        caseSensitive: newBucket.caseSensitive || false,
-        useRegex: newBucket.useRegex || false,
-        searchInTitle: newBucket.searchInTitle || true,
-        searchInBody: newBucket.searchInBody || true,
-      });
+      if (editingBucketId) {
+        // Update existing bucket
+        store.updateBucket(editingBucketId, {
+          name: newBucket.name,
+          color: newBucket.color || '#BB86FC',
+          keywords: newBucket.keywords,
+          operator: newBucket.operator || 'AND',
+          caseSensitive: newBucket.caseSensitive || false,
+          useRegex: newBucket.useRegex || false,
+          searchInTitle: newBucket.searchInTitle || true,
+          searchInBody: newBucket.searchInBody || true,
+        });
+      } else {
+        // Create new bucket
+        store.addBucket({
+          id: crypto.randomUUID(),
+          name: newBucket.name,
+          color: newBucket.color || '#BB86FC',
+          keywords: newBucket.keywords,
+          operator: newBucket.operator || 'AND',
+          caseSensitive: newBucket.caseSensitive || false,
+          useRegex: newBucket.useRegex || false,
+          searchInTitle: newBucket.searchInTitle || true,
+          searchInBody: newBucket.searchInBody || true,
+        });
+      }
+      
+      // Reset the form
       setNewBucket({
         name: '',
         color: '#BB86FC',
@@ -323,8 +407,39 @@ function App() {
         searchInTitle: true,
         searchInBody: true,
       });
+      setEditingBucketId(null);
       setShowBucketForm(false);
     }
+  };
+
+  const handleEditBucket = (bucket: Bucket) => {
+    setEditingBucketId(bucket.id);
+    setNewBucket({
+      name: bucket.name,
+      color: bucket.color,
+      keywords: [...bucket.keywords],
+      operator: bucket.operator,
+      caseSensitive: bucket.caseSensitive,
+      useRegex: bucket.useRegex,
+      searchInTitle: bucket.searchInTitle,
+      searchInBody: bucket.searchInBody,
+    });
+    setShowBucketForm(true);
+  };
+
+  const handleCancelBucketEdit = () => {
+    setNewBucket({
+      name: '',
+      color: '#BB86FC',
+      keywords: [],
+      operator: 'AND',
+      caseSensitive: false,
+      useRegex: false,
+      searchInTitle: true,
+      searchInBody: true,
+    });
+    setEditingBucketId(null);
+    setShowBucketForm(false);
   };
 
   const handleAddKeyword = () => {
@@ -351,6 +466,15 @@ function App() {
     }
   };
 
+  const handleAssignToBucket = (item: FeedItem, bucketId: string) => {
+    // Add the bucket ID to the item's bucketIds array if it's not already there
+    if (!item.bucketIds || !item.bucketIds.includes(bucketId)) {
+      store.assignItemToBucket(item.id, bucketId);
+    }
+    setShowBucketSelector(false);
+    setAssignToBucketItem(null);
+  };
+
   const filteredItems = useMemo(() => {
     let items = store.items;
 
@@ -363,18 +487,19 @@ function App() {
 
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase();
-      return items.filter(item => {
-        const matchTitle = searchInTitle && item.title.toLowerCase().includes(query);
-        const matchBody = searchInBody && item.content.toLowerCase().includes(query);
-        const matchCategories = item.categories.some(category => 
-          category.toLowerCase().includes(query)
+      items = items.filter(item => {
+        const matchTitle = searchInTitle && item.title && item.title.toLowerCase().includes(query);
+        const matchBody = searchInBody && item.content && item.content.toLowerCase().includes(query);
+        const matchCategories = item.categories && Array.isArray(item.categories) && item.categories.some(category => 
+          category && category.toLowerCase().includes(query)
         );
         return matchTitle || matchBody || matchCategories;
       });
     }
 
-    return items;
-  }, [store.items, store.selectedBucketId, searchQuery, searchInTitle, searchInBody, store.buckets]);
+    // Apply sorting
+    return [...items].sort(getCurrentSortFn());
+  }, [store.items, store.selectedBucketId, searchQuery, searchInTitle, searchInBody, store.buckets, sortOption]);
 
   return (
     <DndContext onDragEnd={handleDragEnd}>
@@ -515,9 +640,9 @@ function App() {
                       <button
                         onClick={() => handleRefreshFeed(feed.id)}
                         className="text-[#BB86FC] hover:text-[#BB86FC]/80 p-1"
-                        disabled={refreshingFeeds.includes(feed.id)}
+                        disabled={refreshingFeeds && refreshingFeeds.includes(feed.id)}
                       >
-                        <RefreshCw className={`w-4 h-4 ${refreshingFeeds.includes(feed.id) ? 'animate-spin' : ''}`} />
+                        <RefreshCw className={`w-4 h-4 ${refreshingFeeds && refreshingFeeds.includes(feed.id) ? 'animate-spin' : ''}`} />
                       </button>
                       <button
                         onClick={() => store.removeFeed(feed.id)}
@@ -544,7 +669,20 @@ function App() {
                       <Filter className="w-4 h-4" />
                     </button>
                     <button
-                      onClick={() => setShowBucketForm(!showBucketForm)}
+                      onClick={() => {
+                        setEditingBucketId(null);
+                        setNewBucket({
+                          name: '',
+                          color: '#BB86FC',
+                          keywords: [],
+                          operator: 'AND',
+                          caseSensitive: false,
+                          useRegex: false,
+                          searchInTitle: true,
+                          searchInBody: true,
+                        });
+                        setShowBucketForm(!showBucketForm);
+                      }}
                       className="p-1 hover:bg-[#BB86FC] rounded"
                     >
                       <Plus className="w-4 h-4" />
@@ -554,6 +692,9 @@ function App() {
 
                 {showBucketForm && (
                   <div className="bg-[#2C2C2C] p-3 rounded mb-4">
+                    <h3 className="text-white font-bold mb-2">
+                      {editingBucketId ? 'Edit Bucket' : 'Create New Bucket'}
+                    </h3>
                     <input
                       type="text"
                       value={newBucket.name}
@@ -688,10 +829,10 @@ function App() {
                         disabled={!newBucket.name || !newBucket.keywords?.length}
                         className="flex-1 bg-[#BB86FC] p-2 rounded hover:bg-opacity-80 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        Create Bucket
+                        {editingBucketId ? 'Update Bucket' : 'Create Bucket'}
                       </button>
                       <button
-                        onClick={() => setShowBucketForm(false)}
+                        onClick={handleCancelBucketEdit}
                         className="bg-[#1E1E1E] p-2 rounded hover:bg-opacity-80"
                       >
                         Cancel
@@ -722,15 +863,26 @@ function App() {
                         </span>
                       </div>
                     </div>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        store.removeBucket(bucket.id);
-                      }}
-                      className="text-red-500 hover:text-red-400"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleEditBucket(bucket);
+                        }}
+                        className="text-white hover:text-gray-200 p-1"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          store.removeBucket(bucket.id);
+                        }}
+                        className="text-red-500 hover:text-red-400"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -780,17 +932,49 @@ function App() {
                   Search in body
                 </label>
               </div>
-              <p className="text-sm text-gray-400">
-                {store.selectedBucketId ? (
-                  <>
-                    Showing articles in bucket "
-                    {store.buckets.find(b => b.id === store.selectedBucketId)?.name}"
-                  </>
-                ) : (
-                  'Showing all articles'
-                )}
-                {searchQuery && ` • Found ${filteredItems.length} ${filteredItems.length === 1 ? 'result' : 'results'}`}
-              </p>
+              <div className="flex items-center gap-4">
+                <p className="text-sm text-gray-400">
+                  {store.selectedBucketId ? (
+                    <>
+                      Showing articles in bucket "
+                      {store.buckets.find(b => b.id === store.selectedBucketId)?.name}"
+                    </>
+                  ) : (
+                    'Showing all articles'
+                  )}
+                  {searchQuery && ` • Found ${filteredItems.length} ${filteredItems.length === 1 ? 'result' : 'results'}`}
+                </p>
+                
+                {/* Sorting dropdown */}
+                <div className="relative">
+                  <button 
+                    onClick={() => setShowSortMenu(!showSortMenu)}
+                    className="flex items-center gap-2 px-3 py-2 bg-[#2C2C2C] rounded hover:bg-[#3C3C3C]"
+                  >
+                    <SortDesc className="w-4 h-4" />
+                    <span className="text-sm">{sortOptions.find(option => option.id === sortOption)?.label || 'Sort'}</span>
+                  </button>
+                  
+                  {showSortMenu && (
+                    <div className="absolute right-0 mt-1 bg-[#2C2C2C] rounded shadow-lg z-10 min-w-[180px]">
+                      {sortOptions.map(option => (
+                        <button
+                          key={option.id}
+                          className={`w-full text-left px-4 py-2 hover:bg-[#3C3C3C] ${
+                            sortOption === option.id ? 'bg-[#BB86FC] bg-opacity-20' : ''
+                          }`}
+                          onClick={() => {
+                            setSortOption(option.id);
+                            setShowSortMenu(false);
+                          }}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
 
@@ -801,9 +985,35 @@ function App() {
                 className="bg-[#2C2C2C] p-4 rounded-lg hover:ring-2 hover:ring-[#BB86FC] transition-all"
               >
                 <h3 className="text-lg font-bold mb-2">{item.title}</h3>
-                <p className="text-sm text-gray-400 mb-4">
+                <p className="text-sm text-gray-400 mb-2">
                   {new Date(item.pubDate).toLocaleDateString()}
                 </p>
+                {item.bucketIds && item.bucketIds.length > 0 && (
+                  <div className="flex flex-wrap gap-1 mb-3">
+                    {item.bucketIds.map(bucketId => {
+                      const bucket = store.buckets.find(b => b.id === bucketId);
+                      return bucket ? (
+                        <span 
+                          key={bucketId}
+                          className="text-xs px-2 py-0.5 rounded-full flex items-center gap-1" 
+                          style={{ backgroundColor: bucket.color }}
+                        >
+                          {bucket.name}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              store.removeItemFromBucket(item.id, bucketId);
+                            }}
+                            className="hover:text-red-400 ml-1"
+                            title={`Remove from ${bucket.name}`}
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </span>
+                      ) : null;
+                    })}
+                  </div>
+                )}
                 <div className="flex justify-between items-center">
                   <a
                     href={item.link}
@@ -814,6 +1024,16 @@ function App() {
                     Read More
                   </a>
                   <div className="flex gap-2">
+                    <button
+                      onClick={() => {
+                        setAssignToBucketItem(item);
+                        setShowBucketSelector(true);
+                      }}
+                      className="p-1 rounded hover:bg-[#BB86FC] hover:bg-opacity-20"
+                      title="Assign to bucket"
+                    >
+                      <FolderPlus className="w-4 h-4" />
+                    </button>
                     <button
                       onClick={() => store.toggleBookmark(item.id)}
                       className={`p-1 rounded hover:bg-[#BB86FC] hover:bg-opacity-20 ${
@@ -830,6 +1050,53 @@ function App() {
               </div>
             ))}
           </div>
+
+          {/* Bucket Selector Modal */}
+          {showBucketSelector && assignToBucketItem && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+              <div className="bg-[#2C2C2C] p-4 rounded-lg max-w-md w-full">
+                <h3 className="text-xl font-bold mb-4">Assign to Bucket</h3>
+                <p className="mb-4 text-sm">Select a bucket to assign this article:</p>
+                <div className="max-h-60 overflow-y-auto">
+                  {store.buckets.length > 0 ? (
+                    <div className="space-y-2">
+                      {store.buckets.map(bucket => {
+                        const isAssigned = assignToBucketItem.bucketIds && 
+                                          assignToBucketItem.bucketIds.includes(bucket.id);
+                        return (
+                          <button
+                            key={bucket.id}
+                            onClick={() => handleAssignToBucket(assignToBucketItem, bucket.id)}
+                            className={`w-full text-left p-2 rounded flex items-center gap-2 ${
+                              isAssigned ? 'ring-2 ring-[#BB86FC]' : 'hover:bg-[#3C3C3C]'
+                            }`}
+                            style={{ backgroundColor: bucket.color }}
+                            disabled={isAssigned}
+                          >
+                            <span>{bucket.name}</span>
+                            {isAssigned && <span className="ml-auto text-sm">(Already assigned)</span>}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="text-center text-gray-400">No buckets available. Create a bucket first.</p>
+                  )}
+                </div>
+                <div className="mt-4 flex justify-end">
+                  <button
+                    onClick={() => {
+                      setShowBucketSelector(false);
+                      setAssignToBucketItem(null);
+                    }}
+                    className="bg-[#1E1E1E] p-2 rounded hover:bg-opacity-80"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </DndContext>

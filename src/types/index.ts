@@ -9,6 +9,7 @@ export interface FeedItem {
   isRead: boolean;
   isBookmarked: boolean;
   author?: string;
+  bucketIds: string[]; // Track which buckets this item has been matched to
 }
 
 export interface Bucket {

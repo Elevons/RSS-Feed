@@ -12,6 +12,7 @@ interface AppState {
   addFeed: (url: string) => Promise<void>;
   removeFeed: (id: string) => void;
   addBucket: (bucket: Bucket) => void;
+  updateBucket: (id: string, bucketData: Partial<Bucket>) => void;
   removeBucket: (id: string) => void;
   toggleReadStatus: (id: string) => void;
   toggleBookmark: (id: string) => void;
@@ -21,6 +22,9 @@ interface AppState {
   selectBucket: (id: string | null) => void;
   getItemsForBucket: (bucket: Bucket) => FeedItem[];
   setAutoRefresh: (config: AutoRefreshConfig) => void;
+  itemMatchesBucket: (item: FeedItem, bucket: Bucket) => boolean;
+  assignItemToBucket: (itemId: string, bucketId: string) => void;
+  removeItemFromBucket: (itemId: string, bucketId: string) => void;
 }
 
 const createProxyUrl = (url: string) => {
@@ -62,6 +66,7 @@ const processFeedItem = (feedId: string, item: any): FeedItem => ({
   isRead: false,
   isBookmarked: false,
   author: item?.author || undefined,
+  bucketIds: [], // Initialize empty array of bucket IDs
 });
 
 export const useStore = create<AppState>()(
@@ -151,33 +156,46 @@ export const useStore = create<AppState>()(
           const newItems = feed.items?.map(item => processFeedItem(feedId, item)) || [];
 
           set(state => {
-            // Get items from other feeds
-            const otherFeedItems = state.items.filter(item => item.feedId !== feedId);
-            
-            // Create a map of all items for deduplication
+            // Create a map of feed items by their key
             const itemMap = new Map();
             
-            // Add other feed items first
-            otherFeedItems.forEach(item => {
+            // First add all items that have bucket assignments to preserve them
+            const itemsWithBuckets = state.items.filter(item => item.bucketIds && item.bucketIds.length > 0);
+            itemsWithBuckets.forEach(item => {
               const key = createArticleKey(item);
               itemMap.set(key, item);
             });
             
-            // Add new items, preserving read/bookmark status
+            // Then add all items from other feeds
+            const otherFeedItems = state.items.filter(item => 
+              item.feedId !== feedId && 
+              !(item.bucketIds && item.bucketIds.length > 0) // Skip items already added
+            );
+            
+            otherFeedItems.forEach(item => {
+              const key = createArticleKey(item);
+              if (!itemMap.has(key)) {
+                itemMap.set(key, item);
+              }
+            });
+            
+            // Finally add new items, preserving attributes of existing items when possible
             newItems.forEach(newItem => {
               const key = createArticleKey(newItem);
               const existingItem = state.items.find(item => 
-                item.feedId === feedId && createArticleKey(item) === key
+                createArticleKey(item) === key
               );
               
               if (existingItem) {
-                // Keep existing status but update content
+                // Keep existing status, bookmarks, and bucket assignments but update content
                 itemMap.set(key, {
-                  ...existingItem,
-                  content: newItem.content,
-                  pubDate: newItem.pubDate
+                  ...newItem,
+                  id: existingItem.id, // Preserve the original ID
+                  isRead: existingItem.isRead,
+                  isBookmarked: existingItem.isBookmarked,
+                  bucketIds: existingItem.bucketIds || []
                 });
-              } else {
+              } else if (!itemMap.has(key)) {
                 itemMap.set(key, newItem);
               }
             });
@@ -207,6 +225,14 @@ export const useStore = create<AppState>()(
       addBucket: (bucket: Bucket) => {
         set(state => ({
           buckets: [...state.buckets, bucket],
+        }));
+      },
+
+      updateBucket: (id: string, bucketData: Partial<Bucket>) => {
+        set(state => ({
+          buckets: state.buckets.map(bucket => 
+            bucket.id === id ? { ...bucket, ...bucketData } : bucket
+          ),
         }));
       },
 
@@ -255,12 +281,122 @@ export const useStore = create<AppState>()(
       },
 
       getItemsForBucket: (bucket: Bucket): FeedItem[] => {
-        const items = get().items;
-        return items.filter(item => matchItemToBucket(item, bucket));
+        const state = get();
+        const results = state.items.filter(item => {
+          // First check if it's already assigned to this bucket
+          if (item.bucketIds && item.bucketIds.includes(bucket.id)) {
+            return true;
+          }
+          
+          // Otherwise check if it matches the bucket criteria
+          const matches = state.itemMatchesBucket(item, bucket);
+          
+          // If it matches, permanently assign it to this bucket
+          if (matches) {
+            set(state => ({
+              items: state.items.map(stateItem => 
+                stateItem.id === item.id 
+                  ? { ...stateItem, bucketIds: [...(stateItem.bucketIds || []), bucket.id] } 
+                  : stateItem
+              )
+            }));
+          }
+          
+          return matches;
+        });
+        
+        return results;
       },
 
       setAutoRefresh: (config: AutoRefreshConfig) => {
         set({ autoRefresh: config });
+      },
+
+      assignItemToBucket: (itemId: string, bucketId: string) => {
+        set(state => ({
+          items: state.items.map(item => 
+            item.id === itemId 
+              ? { ...item, bucketIds: [...(item.bucketIds || []), bucketId] } 
+              : item
+          )
+        }));
+      },
+
+      removeItemFromBucket: (itemId: string, bucketId: string) => {
+        set(state => ({
+          items: state.items.map(item => 
+            item.id === itemId && item.bucketIds
+              ? { ...item, bucketIds: item.bucketIds.filter(id => id !== bucketId) } 
+              : item
+          )
+        }));
+      },
+
+      itemMatchesBucket: (item: FeedItem, bucket: Bucket): boolean => {
+        const { useRegex, operator, caseSensitive, keywords, searchInTitle, searchInBody } = bucket;
+        
+        if (!item) return false;
+        
+        // Skip empty buckets
+        if (!keywords || keywords.length === 0) return false;
+        
+        // Skip if no search areas are selected
+        if (!searchInTitle && !searchInBody) return false;
+        
+        // Create a combined text to search in
+        let searchableText = '';
+        if (searchInTitle && item.title) {
+          searchableText += item.title + ' ';
+        }
+        if (searchInBody && item.content) {
+          searchableText += item.content;
+        }
+        
+        // Process the text based on case sensitivity
+        const processedText = caseSensitive ? searchableText : searchableText.toLowerCase();
+        
+        // Process keywords based on case sensitivity and regex
+        const processedKeywords = keywords.map(keyword => {
+          // Skip processing empty keywords
+          if (!keyword) return '';
+          
+          if (useRegex) {
+            try {
+              const flags = caseSensitive ? '' : 'i';
+              return new RegExp(keyword, flags);
+            } catch (error) {
+              console.error(`Invalid regex pattern: ${keyword}`);
+              return caseSensitive ? keyword : keyword.toLowerCase();
+            }
+          }
+          return caseSensitive ? keyword : keyword.toLowerCase();
+        }).filter(k => k); // Filter out empty keywords
+        
+        // Apply the matching logic based on the operator
+        if (operator === 'AND') {
+          return processedKeywords.length > 0 && processedKeywords.every(keyword => {
+            if (keyword instanceof RegExp) {
+              return keyword.test(processedText);
+            }
+            return processedText.includes(keyword as string);
+          });
+        } else if (operator === 'OR') {
+          return processedKeywords.length > 0 && processedKeywords.some(keyword => {
+            if (keyword instanceof RegExp) {
+              return keyword.test(processedText);
+            }
+            return processedText.includes(keyword as string);
+          });
+        } else if (operator === 'NOT') {
+          return processedKeywords.length > 0 && processedKeywords.every(keyword => {
+            if (keyword instanceof RegExp) {
+              return !keyword.test(processedText);
+            }
+            return !processedText.includes(keyword as string);
+          });
+        }
+        
+        return false;
       },
     }),
     {
@@ -268,70 +404,3 @@ export const useStore = create<AppState>()(
     }
   )
 );
-
-function matchItemToBucket(item: FeedItem, bucket: Bucket): boolean {
-  const matchText = (text: string, keywords: string[], operator: 'AND' | 'OR' | 'NOT', useRegex: boolean, caseSensitive: boolean): boolean => {
-    const processedText = caseSensitive ? text : text.toLowerCase();
-    const processedKeywords = caseSensitive ? keywords : keywords.map(k => k.toLowerCase());
-
-    if (useRegex) {
-      try {
-        const regexMatches = processedKeywords.map(keyword => {
-          const regex = new RegExp(keyword, caseSensitive ? '' : 'i');
-          return regex.test(processedText);
-        });
-
-        switch (operator) {
-          case 'AND':
-            return regexMatches.every(match => match);
-          case 'OR':
-            return regexMatches.some(match => match);
-          case 'NOT':
-            return regexMatches.every(match => !match);
-          default:
-            return false;
-        }
-      } catch {
-        return false;
-      }
-    } else {
-      switch (operator) {
-        case 'AND':
-          return processedKeywords.every(keyword => processedText.includes(keyword));
-        case 'OR':
-          return processedKeywords.some(keyword => processedText.includes(keyword));
-        case 'NOT':
-          return processedKeywords.every(keyword => !processedText.includes(keyword));
-        default:
-          return false;
-      }
-    }
-  };
-
-  // Check title if enabled
-  if (bucket.searchInTitle) {
-    const titleMatch = matchText(
-      item.title,
-      bucket.keywords,
-      bucket.operator,
-      bucket.useRegex,
-      bucket.caseSensitive
-    );
-    if (titleMatch) return true;
-  }
-
-  // Check content if enabled
-  if (bucket.searchInBody) {
-    const contentMatch = matchText(
-      item.content,
-      bucket.keywords,
-      bucket.operator,
-      bucket.useRegex,
-      bucket.caseSensitive
-    );
-    if (contentMatch) return true;
-  }
-
-  // If neither title nor content matched (or weren't searched), return false
-  return false;
-}
