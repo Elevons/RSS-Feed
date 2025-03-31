@@ -26,6 +26,7 @@ interface AppState {
   assignItemToBucket: (itemId: string, bucketId: string) => void;
   removeItemFromBucket: (itemId: string, bucketId: string) => void;
   markAsRead: (itemId: string) => void;
+  clearStore: () => void;
 }
 
 const createProxyUrl = (url: string) => {
@@ -157,46 +158,34 @@ export const useStore = create<AppState>()(
           const newItems = feed.items?.map(item => processFeedItem(feedId, item)) || [];
 
           set(state => {
-            // Create a map of feed items by their key
+            // Create a map of all existing items by their key
             const itemMap = new Map();
             
-            // First add all items that have bucket assignments to preserve them
-            const itemsWithBuckets = state.items.filter(item => item.bucketIds && item.bucketIds.length > 0);
-            itemsWithBuckets.forEach(item => {
+            // First add all existing items to the map
+            state.items.forEach(item => {
               const key = createArticleKey(item);
               itemMap.set(key, item);
             });
             
-            // Then add all items from other feeds
-            const otherFeedItems = state.items.filter(item => 
-              item.feedId !== feedId && 
-              !(item.bucketIds && item.bucketIds.length > 0) // Skip items already added
-            );
-            
-            otherFeedItems.forEach(item => {
-              const key = createArticleKey(item);
-              if (!itemMap.has(key)) {
-                itemMap.set(key, item);
-              }
-            });
-            
-            // Finally add new items, preserving attributes of existing items when possible
+            // Then process new items, updating existing ones or adding new ones
             newItems.forEach(newItem => {
               const key = createArticleKey(newItem);
-              const existingItem = state.items.find(item => 
-                createArticleKey(item) === key
-              );
+              const existingItem = itemMap.get(key);
               
               if (existingItem) {
-                // Keep existing status, bookmarks, and bucket assignments but update content
+                // Update existing item while preserving its state
                 itemMap.set(key, {
-                  ...newItem,
-                  id: existingItem.id, // Preserve the original ID
-                  isRead: existingItem.isRead,
-                  isBookmarked: existingItem.isBookmarked,
-                  bucketIds: existingItem.bucketIds || []
+                  ...existingItem,
+                  // Only update content if it's changed or was empty
+                  content: existingItem.content && existingItem.content.length > newItem.content.length ? 
+                    existingItem.content : newItem.content,
+                  // Update categories if new ones are available
+                  categories: newItem.categories?.length ? 
+                    Array.from(new Set([...(existingItem.categories || []), ...newItem.categories])) : 
+                    existingItem.categories
                 });
-              } else if (!itemMap.has(key)) {
+              } else {
+                // Add new item
                 itemMap.set(key, newItem);
               }
             });
@@ -268,12 +257,74 @@ export const useStore = create<AppState>()(
 
       updateFeeds: async () => {
         const { feeds } = get();
-        for (const feed of feeds) {
-          try {
-            await get().updateFeed(feed.url, feed.id);
-          } catch (error) {
-            console.error(`Failed to update feed ${feed.url}:`, error);
+        const updatedFeeds = [];
+        
+        try {
+          const { parse } = await import('rss-to-json');
+          
+          // Create a map to store all items
+          const allItemsMap = new Map();
+          
+          // Add existing items to the map
+          get().items.forEach(item => {
+            const key = createArticleKey(item);
+            allItemsMap.set(key, item);
+          });
+          
+          // Process each feed
+          for (const feed of feeds) {
+            try {
+              const proxyUrl = createProxyUrl(feed.url);
+              const parsedFeed = await parse(proxyUrl);
+              
+              if (parsedFeed) {
+                // Process new items from this feed
+                const newItems = parsedFeed.items?.map(item => processFeedItem(feed.id, item)) || [];
+                
+                // Update or add items to the map
+                newItems.forEach(newItem => {
+                  const key = createArticleKey(newItem);
+                  const existingItem = allItemsMap.get(key);
+                  
+                  if (existingItem) {
+                    // Preserve existing state while updating content
+                    allItemsMap.set(key, {
+                      ...existingItem,
+                      // Only update content if it's changed or was empty
+                      content: existingItem.content && existingItem.content.length > newItem.content.length ? 
+                        existingItem.content : newItem.content,
+                      // Update categories if new ones are available
+                      categories: newItem.categories?.length ? 
+                        Array.from(new Set([...(existingItem.categories || []), ...newItem.categories])) : 
+                        existingItem.categories
+                    });
+                  } else {
+                    // Add new item
+                    allItemsMap.set(key, newItem);
+                  }
+                });
+                
+                // Mark feed as successfully updated
+                updatedFeeds.push({
+                  ...feed,
+                  lastUpdated: new Date().toISOString()
+                });
+              }
+            } catch (error) {
+              console.error(`Failed to update feed ${feed.url}:`, error);
+              // Keep the original feed entry
+              updatedFeeds.push(feed);
+            }
           }
+          
+          // Update state with all processed items
+          set({
+            feeds: updatedFeeds,
+            items: Array.from(allItemsMap.values())
+          });
+        } catch (error) {
+          console.error('Error updating feeds:', error);
+          throw error;
         }
       },
 
@@ -406,6 +457,20 @@ export const useStore = create<AppState>()(
             item.id === itemId ? { ...item, isRead: true } : item
           )
         })),
+
+      clearStore: () => {
+        set({
+          feeds: [],
+          items: [],
+          buckets: [],
+          searchConfigs: [],
+          selectedBucketId: null,
+          autoRefresh: {
+            enabled: false,
+            intervalMinutes: 30,
+          }
+        });
+      },
     }),
     {
       name: 'rss-feed-storage',

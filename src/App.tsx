@@ -546,6 +546,18 @@ function App() {
           {showSidebar && (
             <>
               <div className="mb-6">
+                <button
+                  onClick={() => {
+                    if (window.confirm('Are you sure you want to reset all data? This will delete all feeds, articles, buckets, and settings. This action cannot be undone.')) {
+                      store.clearStore();
+                    }
+                  }}
+                  className="p-2 mb-4 bg-red-500 hover:bg-red-600 text-white rounded w-full flex items-center justify-center"
+                >
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  Reset All Data
+                </button>
+                
                 <h2 className="text-[#BB86FC] font-bold mb-2">Bookmarks</h2>
                 <div className="space-y-2">
                   {store.items.filter(item => item.isBookmarked).map(item => (
